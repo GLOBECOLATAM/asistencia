@@ -459,6 +459,7 @@ function barraCaptura(){
   $('#cShot').onclick=disparar;
 }
 function cerrarCamara(){
+  quitarAviso();
   if(STREAM){STREAM.getTracks().forEach(t=>t.stop());STREAM=null;}
   $('#cam').classList.remove('on');
 }
@@ -487,8 +488,9 @@ function comprimir(src,w,h,espejo){
 function mostrarPrevia(){
   $('#video').hidden=true;$('#marco').hidden=true;
   const p=$('#prev');p.src=FOTO;p.hidden=false;
-  $('#barra').innerHTML=`<button id="cOtra">Repetir</button><button class="ok" id="cOk">Enviar ${TIPO==='ENTRADA'?'entrada':'salida'}</button>`;
-  $('#cOtra').onclick=()=>abrirCamara(TIPO);
+  $('#barra').innerHTML=`<button id="cCan2">Cancelar</button><button id="cOtra">Repetir</button><button class="ok" id="cOk">Enviar ${TIPO==='ENTRADA'?'entrada':'salida'}</button>`;
+  $('#cCan2').onclick=cerrarCamara;
+  $('#cOtra').onclick=()=>{quitarAviso();abrirCamara(TIPO);};
   $('#cOk').onclick=enviar;
 }
 
@@ -504,25 +506,65 @@ const ERR_MARCA={
   sin_planta:'No tienes planta asignada.',planta_desconocida:'Tu planta no tiene ubicación registrada.',
   ocupado:'El servidor está ocupado. Intenta en unos segundos.'
 };
+/* Aviso que se queda fijo sobre la foto hasta que la persona actúe */
+function avisoCamara(txt,detalle){
+  let a=$('#camAviso');
+  if(!a){a=document.createElement('div');a.id='camAviso';$('.vista').appendChild(a);}
+  a.style.cssText='position:absolute;left:12px;right:12px;top:calc(12px + env(safe-area-inset-top,0px));background:rgba(179,38,30,.92);color:#fff;padding:12px 14px;border-radius:14px;font-size:13.5px;line-height:1.45;z-index:2';
+  a.innerHTML='<b style="display:block;margin-bottom:2px">No se registró</b>'+esc(txt)+
+    (detalle?'<br><code style="font-size:11.5px;opacity:.9;word-break:break-word">'+esc(detalle)+'</code>':'');
+}
+function quitarAviso(){const a=$('#camAviso');if(a)a.remove();}
+
 async function enviar(){
   const b=$('#cOk');b.disabled=true;b.innerHTML='<span class="spin"></span>';
+  quitarAviso();
+  const tipo=TIPO;
   try{
-    const r=await api({action:'as_marcar',tipo:TIPO,foto:FOTO,lat:POS.lat,lng:POS.lng,precision:POS.precision});
+    const r=await api({action:'as_marcar',tipo,foto:FOTO,lat:POS.lat,lng:POS.lng,precision:POS.precision});
     if(!r.ok){
       if(MSG[r.error]&&!ERR_MARCA[r.error]){cerrarCamara();pintarError(r.error);return;}
-      toast(ERR_MARCA[r.error]||'No se pudo registrar. Intenta otra vez.');
+      if(r.error==='ya_tiene_entrada'||r.error==='sin_entrada'){cerrarCamara();toast(ERR_MARCA[r.error]);cargar();return;}
       b.disabled=false;b.textContent='Reintentar';
-      if(r.error==='ya_tiene_entrada'||r.error==='sin_entrada'){cerrarCamara();cargar();}
+      avisoCamara(ERR_MARCA[r.error]||'El servidor rechazó la marcación.', ERR_MARCA[r.error]?'':r.error);
       return;
     }
-    cerrarCamara();
-    E=r.estado; DESFASE=r.estado.ahora-Date.now(); pintar();
-    resultado(r);
-    if(navigator.vibrate)navigator.vibrate(60);
+    exito(r);
   }catch(e){
     b.disabled=false;b.textContent='Reintentar';
-    toast(navigator.onLine?'No pudimos conectar. Intenta otra vez.':'Te quedaste sin señal. Intenta al recuperarla.');
+    const m=String(e.message);
+    // Puede que el servidor sí la haya guardado y solo se perdió la respuesta:
+    // antes de pedir que repita, preguntamos cómo quedó.
+    avisoCamara('Comprobando si quedó registrada…');
+    const guardada=await verificarGuardada(tipo);
+    if(guardada)return;
+    avisoCamara(
+      m==='servidor'?'El servidor respondió con un error.':
+      m==='lento'?'El servidor tardó demasiado. Toca Reintentar.':
+      navigator.onLine?'No pudimos conectar. Toca Reintentar.':'Te quedaste sin señal. Reintenta al recuperarla.',
+      m==='servidor'?e.detalle:'');
   }
+}
+async function verificarGuardada(tipo){
+  try{
+    const r=await api({action:'as_estado'});
+    if(!r||!r.ok)return false;
+    const abierta=!!r.abierta;
+    if((tipo==='ENTRADA'&&abierta)||(tipo==='SALIDA'&&!abierta&&E&&E.abierta)){
+      cerrarCamara();E=r;DESFASE=r.ahora-Date.now();pintar();
+      toast(tipo==='ENTRADA'?'Tu entrada sí quedó registrada.':'Tu salida sí quedó registrada.');
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+function exito(r){
+  quitarAviso();
+  cerrarCamara();
+  E=r.estado; DESFASE=r.estado.ahora-Date.now(); pintar();
+  resultado(r);
+  if(r.aviso_foto)setTimeout(()=>toast(r.aviso_foto),400);
+  if(navigator.vibrate)navigator.vibrate(60);
 }
 function resultado(r){
   const fz=r.zona==='FUERA DE ZONA', c=r.resumen;
