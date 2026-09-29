@@ -244,7 +244,17 @@ async function api(cuerpo){
   try{
     const r=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},
       body:JSON.stringify({...cuerpo,token:SES.token,device:DEVICE}),signal:ctl.signal,redirect:'follow'});
-    return await r.json();
+    const txt=await r.text();
+    try{return JSON.parse(txt);}
+    catch(e){
+      // Google respondió una página de error en vez de datos: mostramos qué dice
+      const t=(txt.match(/<title>([^<]*)<\/title>/i)||[])[1]||'';
+      const m=(txt.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi,'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim()).slice(0,220);
+      const err=new Error('servidor');err.detalle=(t?t+' · ':'')+m;throw err;
+    }
+  }catch(e){
+    if(e.name==='AbortError'){const x=new Error('lento');throw x;}
+    throw e;
   }finally{clearTimeout(to);}
 }
 
@@ -267,7 +277,10 @@ async function cargar(silencioso){
     DESFASE=r.ahora+viaje/2-Date.now();
     E=r; pintar();
   }catch(e){
-    if(!silencioso)pintarError(String(e.message)==='sin_api'?'sin_api':'red');
+    if(silencioso)return;
+    const m=String(e.message);
+    if(m==='servidor')pintarError('servidor',e.detalle);
+    else pintarError(m==='sin_api'?'sin_api':m==='lento'?'lento':'red');
   }
 }
 
@@ -281,12 +294,18 @@ const MSG={
   inactivo:['Tu usuario está inactivo','Contacta a tu supervisor.'],
   no_encontrado:['No encontramos tu registro','Contacta a soporte.'],
   sin_api:['Falta conectar el servidor','Abre primero el portal para que se configure.'],
-  red:['No pudimos conectar','Revisa tu señal e intenta otra vez.']
+  red:['No pudimos conectar','Revisa tu señal e intenta otra vez.'],
+  lento:['El servidor tardó demasiado','Intenta otra vez en un momento.'],
+  servidor:['El servidor respondió con un error','Casi siempre falta publicar la nueva versión del script (Implementar → Gestionar implementaciones → Nueva versión) o autorizarlo. Detalle:'],
+  accion_desconocida:['El servidor aún no conoce Asistencia','Falta la línea de as_estado en doPost, o publicar la nueva versión del script.'],
+  sin_planta:['No tienes una planta asignada','Pide a tu supervisor que la registre en la columna «Planta».']
 };
-function pintarError(cod){
-  const m=MSG[cod]||['Algo salió mal','Intenta otra vez en un momento. ('+esc(cod)+')'];
-  $('#main').innerHTML=`<div class="aviso bad"><div><b>${m[0]}</b>${m[1]}</div></div>
-    <button class="primary" onclick="location.href='../portal/'">Volver al portal</button>`;
+function pintarError(cod,detalle){
+  const m=MSG[cod]||['Algo salió mal','El servidor dijo:'];
+  const d=detalle||(!MSG[cod]?cod:'');
+  $('#main').innerHTML=`<div class="aviso bad"><div><b>${m[0]}</b>${m[1]}${d?`<br><code style="font-size:11.5px;opacity:.85;word-break:break-word">${esc(d)}</code>`:''}</div></div>
+    <button class="primary" onclick="cargar()" style="margin-bottom:10px">Reintentar</button>
+    <button class="primary" style="background:var(--surface-2);color:var(--ink)" onclick="location.href='../portal/'">Volver al portal</button>`;
 }
 function pintarSinSenal(){
   $('#main').innerHTML=`<div class="aviso warn"><div><b>Necesitas señal para timbrar</b>
